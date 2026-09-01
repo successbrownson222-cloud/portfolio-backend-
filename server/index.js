@@ -18,7 +18,39 @@ app.get('/', (req, res) => {
   res.status(200).json({ status: 'ok', message: 'Paystack backend is running' });
 });
 
-// Route to verify payment with Paystack
+// 1. NEW ROUTE: Initialize payment with Paystack
+app.post('/pay', async (req, res) => {
+  const { email, amount } = req.body;
+
+  if (!email || !amount) {
+    return res.status(400).json({ status: 'error', message: 'Email and amount are required' });
+  }
+
+  try {
+    const response = await axios.post(
+      'https://api.paystack.co/transaction/initialize',
+      {
+        email,
+        amount: amount * 100, // Paystack expects kobo, not naira
+        callback_url: 'https://your-frontend-url.com/callback' // Change this to your frontend
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    return res.status(200).json(response.data);
+    
+  } catch (error) {
+    console.error('Initialize Error:', error.response?.data || error.message);
+    return res.status(500).json({ status: 'error', message: 'Payment initialization failed' });
+  }
+});
+
+// 2. Route to verify payment with Paystack
 app.post('/api/verify-payment', async (req, res) => {
   const { reference } = req.body;
   if (!reference) {
@@ -35,7 +67,7 @@ app.post('/api/verify-payment', async (req, res) => {
       }
     );
 
-    const paymentData = response.data.data;
+    const paymentData = response.data;
     if (paymentData.status === 'success') {
       // TODO: Save to DB: email, amount, reference
       return res.status(200).json({ 
@@ -57,7 +89,7 @@ app.post('/api/verify-payment', async (req, res) => {
   }
 });
 
-// Webhook - Most important
+// 3. Webhook - Most important
 app.post('/api/paystack-webhook', express.raw({type: 'application/json'}), (req, res) => {
   const secret = process.env.PAYSTACK_SECRET_KEY;
   const hash = crypto.createHmac('sha512', secret).update(req.body).digest('hex');
@@ -67,6 +99,7 @@ app.post('/api/paystack-webhook', express.raw({type: 'application/json'}), (req,
     if (event.event === 'charge.success') {
       // TODO: Save to DB here. This is the most trusted source
       // event.data.reference, event.data.customer.email, event.data.amount
+      console.log("Payment success:", event.data.reference);
     }
     return res.status(200).send('OK');
   }
