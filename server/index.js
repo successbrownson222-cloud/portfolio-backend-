@@ -2,25 +2,35 @@ import express from 'express';
 import cors from 'cors';
 import axios from 'axios';
 import crypto from 'crypto';
-import morgan from 'morgan'; // <-- for proper logging
+import morgan from 'morgan';
 import 'dotenv/config';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(morgan('combined')); // <-- Logs every request: method, url, status, time
+// 1. CORS FIX: Allow your Vercel domain
+const allowedOrigins = [
+  'http://localhost:3000', // for local testing
+  'https://mr-brownson-success-portfolio.vercel.app' // your live Vercel site
+];
 
-// Health check route - Render uses this
+app.use(cors({
+  origin: allowedOrigins,
+  methods: ['GET', 'POST'],
+  credentials: true
+}));
+
+app.use(express.json());
+app.use(morgan('combined'));
+
+// Health check route
 app.get('/', (req, res) => {
   res.status(200).json({ status: 'ok', message: 'Paystack backend is running' });
 });
 
-// 1. NEW ROUTE: Initialize payment with Paystack
+// 1. Initialize payment with Paystack
 app.post('/pay', async (req, res) => {
-  const { email, amount } = req.body;
+  const { email, amount, reference, metadata } = req.body;
 
   if (!email || !amount) {
     return res.status(400).json({ status: 'error', message: 'Email and amount are required' });
@@ -31,8 +41,10 @@ app.post('/pay', async (req, res) => {
       'https://api.paystack.co/transaction/initialize',
       {
         email,
-        amount: amount * 100, // Paystack expects kobo, not naira
-        callback_url: 'https://your-frontend-url.com/callback' // Change this to your frontend
+        amount, // frontend already sends kobo
+        reference,
+        metadata,
+        callback_url: 'https://mr-brownson-success-portfolio.vercel.app' // sends user back here after payment
       },
       {
         headers: {
@@ -50,7 +62,7 @@ app.post('/pay', async (req, res) => {
   }
 });
 
-// 2. Route to verify payment with Paystack
+// 2. Verify payment
 app.post('/api/verify-payment', async (req, res) => {
   const { reference } = req.body;
   if (!reference) {
@@ -67,9 +79,8 @@ app.post('/api/verify-payment', async (req, res) => {
       }
     );
 
-    const paymentData = response.data;
+    const paymentData = response.data.data;
     if (paymentData.status === 'success') {
-      // TODO: Save to DB: email, amount, reference
       return res.status(200).json({ 
         status: 'success', 
         message: 'Payment verified',
@@ -83,13 +94,12 @@ app.post('/api/verify-payment', async (req, res) => {
       return res.status(400).json({ status: 'failed', message: 'Payment not successful' });
     }
   } catch (error) {
-    // Log error to Render logs, but don't expose secret to user
     console.error('Verify Error:', error.response?.data || error.message);
     return res.status(500).json({ status: 'error', message: 'Verification failed' });
   }
 });
 
-// 3. Webhook - Most important
+// 3. Webhook
 app.post('/api/paystack-webhook', express.raw({type: 'application/json'}), (req, res) => {
   const secret = process.env.PAYSTACK_SECRET_KEY;
   const hash = crypto.createHmac('sha512', secret).update(req.body).digest('hex');
@@ -97,8 +107,6 @@ app.post('/api/paystack-webhook', express.raw({type: 'application/json'}), (req,
   if (hash === req.headers['x-paystack-signature']) {
     const event = JSON.parse(req.body);
     if (event.event === 'charge.success') {
-      // TODO: Save to DB here. This is the most trusted source
-      // event.data.reference, event.data.customer.email, event.data.amount
       console.log("Payment success:", event.data.reference);
     }
     return res.status(200).send('OK');
@@ -108,5 +116,5 @@ app.post('/api/paystack-webhook', express.raw({type: 'application/json'}), (req,
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`); // Only runs once on startup. This is fine
+  console.log(`Server running on port ${PORT}`);
 });
