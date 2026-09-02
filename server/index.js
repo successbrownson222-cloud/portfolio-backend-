@@ -8,7 +8,7 @@ import 'dotenv/config';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// 1. CORS FIX: Allow your Vercel domain
+// 1. CORS: Allow your Vercel domain
 const allowedOrigins = [
   'http://localhost:3000', // for local testing
   'https://mr-brownson-success-portfolio.vercel.app' // your live Vercel site
@@ -28,7 +28,41 @@ app.get('/', (req, res) => {
   res.status(200).json({ status: 'ok', message: 'Paystack backend is running' });
 });
 
-// 1. Initialize payment with Paystack
+// 2. Thank You page after payment - PROPER MESSAGE RENDER
+app.get('/payment-success', (req, res) => {
+  const { reference } = req.query;
+  
+  res.status(200).send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Payment Successful - Success Brownson Tech</title>
+      <style>
+        body { font-family: system-ui, sans-serif; background: #000; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; }
+        .card { background: #111; padding: 40px; border-radius: 16px; border: 2px solid #22c55e; max-width: 500px; text-align: center; }
+        h1 { color: #22c55e; font-size: 28px; margin-bottom: 10px; }
+        p { color: #9ca3af; line-height: 1.6; }
+        .ref { background: #222; padding: 12px; border-radius: 8px; margin: 20px 0; word-break: break-all; font-family: monospace; color: #22c55e; }
+        a { background: #22c55e; color: black; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block; margin-top: 10px; }
+        a:hover { opacity: 0.9; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h1>✅ Payment Successful!</h1>
+        <p>Thank you for your ₦50,000 deposit. Your project slot is now secured.</p>
+        <p>I will contact you via email within 24 hours to discuss next steps.</p>
+        <div class="ref">Reference: ${reference || 'N/A'}</div>
+        <a href="https://mr-brownson-success-portfolio.vercel.app">← Back to Website</a>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
+// 3. Initialize payment with Paystack
 app.post('/pay', async (req, res) => {
   const { email, amount, reference, metadata } = req.body;
 
@@ -44,7 +78,7 @@ app.post('/pay', async (req, res) => {
         amount, // frontend already sends kobo
         reference,
         metadata,
-        callback_url: 'https://mr-brownson-success-portfolio.vercel.app' // sends user back here after payment
+        callback_url: `https://portfolio-paystack-api.onrender.com/payment-success?reference=${reference}` // redirect to thank you page
       },
       {
         headers: {
@@ -57,12 +91,14 @@ app.post('/pay', async (req, res) => {
     return res.status(200).json(response.data);
     
   } catch (error) {
-    console.error('Initialize Error:', error.response?.data || error.message);
-    return res.status(500).json({ status: 'error', message: 'Payment initialization failed' });
+    return res.status(500).json({ 
+      status: 'error', 
+      message: error.response?.data?.message || 'Payment initialization failed' 
+    });
   }
 });
 
-// 2. Verify payment
+// 4. Verify payment
 app.post('/api/verify-payment', async (req, res) => {
   const { reference } = req.body;
   if (!reference) {
@@ -79,42 +115,52 @@ app.post('/api/verify-payment', async (req, res) => {
       }
     );
 
-    const paymentData = response.data.data;
+    const paymentData = response.data;
     if (paymentData.status === 'success') {
       return res.status(200).json({ 
         status: 'success', 
-        message: 'Payment verified',
+        message: 'Payment verified successfully',
         data: {
           email: paymentData.customer.email,
           amount: paymentData.amount / 100,
-          reference: paymentData.reference
+          reference: paymentData.reference,
+          paid_at: paymentData.paid_at
         }
       });
     } else {
       return res.status(400).json({ status: 'failed', message: 'Payment not successful' });
     }
   } catch (error) {
-    console.error('Verify Error:', error.response?.data || error.message);
-    return res.status(500).json({ status: 'error', message: 'Verification failed' });
+    return res.status(500).json({ 
+      status: 'error', 
+      message: error.response?.data?.message || 'Verification failed' 
+    });
   }
 });
 
-// 3. Webhook
+// 5. Webhook - PROPER MESSAGE RENDER INSTEAD OF console.log
 app.post('/api/paystack-webhook', express.raw({type: 'application/json'}), (req, res) => {
   const secret = process.env.PAYSTACK_SECRET_KEY;
   const hash = crypto.createHmac('sha512', secret).update(req.body).digest('hex');
   
   if (hash === req.headers['x-paystack-signature']) {
     const event = JSON.parse(req.body);
+    
     if (event.event === 'charge.success') {
-      console.log("Payment success:", event.data.reference);
+      // PROPER RESPONSE: You can add email/DB logic here later
+      // For now we just acknowledge to Paystack
+      return res.status(200).json({ 
+        status: 'received', 
+        message: 'Payment event processed successfully' 
+      });
     }
-    return res.status(200).send('OK');
+    
+    return res.status(200).json({ status: 'ignored', message: 'Event not handled' });
   }
   
-  return res.status(400).send('Invalid signature');
+  return res.status(400).json({ status: 'error', message: 'Invalid signature' });
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  // Server start message only shows once in Render logs
 });
