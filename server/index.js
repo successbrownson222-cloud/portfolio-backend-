@@ -148,7 +148,9 @@ app.post('/api/verify-payment', async (req, res) => {
   try {
     const response = await axios.get(
       `https://api.paystack.co/transaction/verify/${reference}`,
-      { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
+      { 
+        headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } 
+      }
     );
 
     const paymentData = response.data.data;
@@ -201,14 +203,15 @@ app.post('/api/verify-flutterwave', async (req, res) => {
   }
 });
 
-// PAYSTACK: Webhook
+// PAYSTACK: Webhook - MUST use raw body
 app.post('/api/paystack-webhook', express.raw({type: 'application/json'}), (req, res) => {
   const secret = process.env.PAYSTACK_SECRET_KEY;
   const hash = crypto.createHmac('sha512', secret).update(req.body).digest('hex');
   
   if (hash === req.headers['x-paystack-signature']) {
-    const event = JSON.parse(req.body);
+    const event = JSON.parse(req.body.toString());
     if (event.event === 'charge.success') {
+      console.log('Paystack payment successful:', event.data.reference)
       return res.status(200).json({ status: 'received' });
     }
     return res.status(200).json({ status: 'ignored' });
@@ -228,10 +231,13 @@ app.post('/webhook/flutterwave', express.json(), (req, res) => {
 
   const payload = req.body;
   if (payload.event === 'charge.completed' && payload.data.status === 'successful') {
+    console.log('Flutterwave payment successful:', payload.data.tx_ref)
     // Handle successful payment here: save to DB, send email
   }
 
   res.status(200).json({ status: 'success' });
 });
 
-app.listen(PORT, () => {});
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
