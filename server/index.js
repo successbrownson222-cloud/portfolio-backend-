@@ -3,14 +3,10 @@ import cors from 'cors';
 import axios from 'axios';
 import crypto from 'crypto';
 import morgan from 'morgan';
-import Flutterwave from 'flutterwave-node-v3';
 import 'dotenv/config';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-
-// Initialize Flutterwave
-const flw = new Flutterwave(process.env.FLW_PUBLIC_KEY, process.env.FLW_SECRET_KEY);
 
 // 1. CORS
 const allowedOrigins = [
@@ -93,6 +89,7 @@ app.post('/pay', async (req, res) => {
     );
     return res.status(200).json(response.data);
   } catch (error) {
+    console.log(error.response?.data)
     return res.status(500).json({ 
       status: 'error', 
       message: error.response?.data?.message || 'Payment initialization failed' 
@@ -100,12 +97,12 @@ app.post('/pay', async (req, res) => {
   }
 });
 
-// FLUTTERWAVE: Initialize payment - USD
+// FLUTTERWAVE: Initialize payment - USD - FIXED
 app.post('/pay/flutterwave', async (req, res) => {
   const { email, amount, name, phone, reference } = req.body;
 
-  if (!email || !amount) {
-    return res.status(400).json({ status: 'error', message: 'Email and amount are required' });
+  if (!email || !amount || !name || !phone) {
+    return res.status(400).json({ status: 'error', message: 'Email, name, phone and amount are required' });
   }
 
   const payload = {
@@ -113,27 +110,44 @@ app.post('/pay/flutterwave', async (req, res) => {
     amount: amount,
     currency: 'USD',
     redirect_url: `https://portfolio-paystack-api.onrender.com/payment-success?reference=${reference}`,
+    payment_options: 'card,banktransfer,ussd',
     customer: {
       email: email,
-      name: name || 'Customer',
-      phonenumber: phone || '08000000000'
+      name: name,
+      phonenumber: phone
     },
     customizations: {
       title: 'Success Brownson Tech',
-      description: 'Project Deposit'
+      description: '50% Project Deposit'
     }
   };
 
   try {
-    const response = await flw.Payment.initiate(payload);
-    return res.status(200).json({ 
-      status: 'success', 
-      data: { link: response.meta.authorization.redirect } 
-    });
+    const response = await axios.post(
+      'https://api.flutterwave.com/v3/payments',
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    
+    if(response.data.status === 'success'){
+      return res.status(200).json({ 
+        status: 'success', 
+        data: { link: response.data.data.link } 
+      });
+    } else {
+      return res.status(400).json({ status: 'error', message: response.data.message });
+    }
+
   } catch (error) {
+    console.log(error.response?.data)
     return res.status(500).json({ 
       status: 'error', 
-      message: error.message 
+      message: error.response?.data?.message || 'Flutterwave initialization failed' 
     });
   }
 });
@@ -181,25 +195,30 @@ app.post('/api/verify-flutterwave', async (req, res) => {
   const { transaction_id } = req.body;
   
   try {
-    const response = await flw.Transaction.verify({ id: transaction_id });
+    const response = await axios.get(
+      `https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`,
+      {
+        headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` }
+      }
+    );
     
-    if (response.status === 'success' && response.data.status === 'successful') {
+    if (response.data.status === 'success' && response.data.data.status === 'successful') {
       return res.status(200).json({
         status: 'success',
         message: 'Payment verified successfully',
         data: {
-          email: response.data.customer.email,
-          amount: response.data.amount,
-          currency: response.data.currency,
-          reference: response.data.tx_ref,
-          paid_at: response.data.created_at
+          email: response.data.data.customer.email,
+          amount: response.data.data.amount,
+          currency: response.data.data.currency,
+          reference: response.data.data.tx_ref,
+          paid_at: response.data.data.created_at
         }
       });
     } else {
       return res.status(400).json({ status: 'failed', message: 'Payment not successful' });
     }
   } catch (error) {
-    return res.status(500).json({ status: 'error', message: error.message });
+    return res.status(500).json({ status: 'error', message: error.response?.data?.message || error.message });
   }
 });
 
@@ -232,7 +251,6 @@ app.post('/webhook/flutterwave', express.json(), (req, res) => {
   const payload = req.body;
   if (payload.event === 'charge.completed' && payload.data.status === 'successful') {
     console.log('Flutterwave payment successful:', payload.data.tx_ref)
-    // Handle successful payment here: save to DB, send email
   }
 
   res.status(200).json({ status: 'success' });
