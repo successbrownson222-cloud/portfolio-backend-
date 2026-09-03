@@ -3,15 +3,19 @@ import cors from 'cors';
 import axios from 'axios';
 import crypto from 'crypto';
 import morgan from 'morgan';
+import Flutterwave from 'flutterwave-node-v3';
 import 'dotenv/config';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// 1. CORS: Allow your Vercel domain
+// Initialize Flutterwave
+const flw = new Flutterwave(process.env.FLW_PUBLIC_KEY, process.env.FLW_SECRET_KEY);
+
+// 1. CORS
 const allowedOrigins = [
-  'http://localhost:3000', // for local testing
-  'https://mr-brownson-success-portfolio.vercel.app' // your live Vercel site
+  'http://localhost:3000',
+  'https://mr-brownson-success-portfolio.vercel.app'
 ];
 
 app.use(cors({
@@ -23,12 +27,12 @@ app.use(cors({
 app.use(express.json());
 app.use(morgan('combined'));
 
-// Health check route
+// Health check
 app.get('/', (req, res) => {
-  res.status(200).json({ status: 'ok', message: 'Paystack backend is running' });
+  res.status(200).json({ status: 'ok', message: 'Paystack + Flutterwave backend is running' });
 });
 
-// 2. Thank You page after payment - PROPER MESSAGE RENDER
+// Thank You page
 app.get('/payment-success', (req, res) => {
   const { reference } = req.query;
   
@@ -52,7 +56,7 @@ app.get('/payment-success', (req, res) => {
     <body>
       <div class="card">
         <h1>✅ Payment Successful!</h1>
-        <p>Thank you for your ₦50,000 deposit. Your project slot is now secured.</p>
+        <p>Thank you for your deposit. Your project slot is now secured.</p>
         <p>I will contact you via email within 24 hours to discuss next steps.</p>
         <div class="ref">Reference: ${reference || 'N/A'}</div>
         <a href="https://mr-brownson-success-portfolio.vercel.app">← Back to Website</a>
@@ -62,7 +66,7 @@ app.get('/payment-success', (req, res) => {
   `);
 });
 
-// 3. Initialize payment with Paystack
+// PAYSTACK: Initialize payment - NGN
 app.post('/pay', async (req, res) => {
   const { email, amount, reference, metadata } = req.body;
 
@@ -75,10 +79,10 @@ app.post('/pay', async (req, res) => {
       'https://api.paystack.co/transaction/initialize',
       {
         email,
-        amount, // frontend already sends kobo
+        amount,
         reference,
         metadata,
-        callback_url: `https://portfolio-paystack-api.onrender.com/payment-success?reference=${reference}` // redirect to thank you page
+        callback_url: `https://portfolio-paystack-api.onrender.com/payment-success?reference=${reference}`
       },
       {
         headers: {
@@ -87,9 +91,7 @@ app.post('/pay', async (req, res) => {
         }
       }
     );
-
     return res.status(200).json(response.data);
-    
   } catch (error) {
     return res.status(500).json({ 
       status: 'error', 
@@ -98,7 +100,45 @@ app.post('/pay', async (req, res) => {
   }
 });
 
-// 4. Verify payment
+// FLUTTERWAVE: Initialize payment - USD
+app.post('/pay/flutterwave', async (req, res) => {
+  const { email, amount, name, phone, reference } = req.body;
+
+  if (!email || !amount) {
+    return res.status(400).json({ status: 'error', message: 'Email and amount are required' });
+  }
+
+  const payload = {
+    tx_ref: reference || `FLW-${Date.now()}`,
+    amount: amount,
+    currency: 'USD',
+    redirect_url: `https://portfolio-paystack-api.onrender.com/payment-success?reference=${reference}`,
+    customer: {
+      email: email,
+      name: name || 'Customer',
+      phonenumber: phone || '08000000000'
+    },
+    customizations: {
+      title: 'Success Brownson Tech',
+      description: 'Project Deposit'
+    }
+  };
+
+  try {
+    const response = await flw.Payment.initiate(payload);
+    return res.status(200).json({ 
+      status: 'success', 
+      data: { link: response.meta.authorization.redirect } 
+    });
+  } catch (error) {
+    return res.status(500).json({ 
+      status: 'error', 
+      message: error.message 
+    });
+  }
+});
+
+// PAYSTACK: Verify payment
 app.post('/api/verify-payment', async (req, res) => {
   const { reference } = req.body;
   if (!reference) {
@@ -108,15 +148,11 @@ app.post('/api/verify-payment', async (req, res) => {
   try {
     const response = await axios.get(
       `https://api.paystack.co/transaction/verify/${reference}`,
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-        }
-      }
+      { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
     );
 
-    const paymentData = response.data;
-    if (paymentData.status === 'success') {
+    const paymentData = response.data.data;
+    if (response.data.status === 'success' && paymentData.status === 'success') {
       return res.status(200).json({ 
         status: 'success', 
         message: 'Payment verified successfully',
@@ -138,29 +174,64 @@ app.post('/api/verify-payment', async (req, res) => {
   }
 });
 
-// 5. Webhook - PROPER MESSAGE RENDER INSTEAD OF console.log
+// FLUTTERWAVE: Verify payment
+app.post('/api/verify-flutterwave', async (req, res) => {
+  const { transaction_id } = req.body;
+  
+  try {
+    const response = await flw.Transaction.verify({ id: transaction_id });
+    
+    if (response.status === 'success' && response.data.status === 'successful') {
+      return res.status(200).json({
+        status: 'success',
+        message: 'Payment verified successfully',
+        data: {
+          email: response.data.customer.email,
+          amount: response.data.amount,
+          currency: response.data.currency,
+          reference: response.data.tx_ref,
+          paid_at: response.data.created_at
+        }
+      });
+    } else {
+      return res.status(400).json({ status: 'failed', message: 'Payment not successful' });
+    }
+  } catch (error) {
+    return res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// PAYSTACK: Webhook
 app.post('/api/paystack-webhook', express.raw({type: 'application/json'}), (req, res) => {
   const secret = process.env.PAYSTACK_SECRET_KEY;
   const hash = crypto.createHmac('sha512', secret).update(req.body).digest('hex');
   
   if (hash === req.headers['x-paystack-signature']) {
     const event = JSON.parse(req.body);
-    
     if (event.event === 'charge.success') {
-      // PROPER RESPONSE: You can add email/DB logic here later
-      // For now we just acknowledge to Paystack
-      return res.status(200).json({ 
-        status: 'received', 
-        message: 'Payment event processed successfully' 
-      });
+      return res.status(200).json({ status: 'received' });
     }
-    
-    return res.status(200).json({ status: 'ignored', message: 'Event not handled' });
+    return res.status(200).json({ status: 'ignored' });
   }
   
   return res.status(400).json({ status: 'error', message: 'Invalid signature' });
 });
 
-app.listen(PORT, () => {
-  // Server start message only shows once in Render logs
+// FLUTTERWAVE: Webhook
+app.post('/webhook/flutterwave', express.json(), (req, res) => {
+  const secret_hash = process.env.FLW_SECRET_HASH;
+  const signature = req.headers['verif-hash'];
+  
+  if (signature !== secret_hash) {
+    return res.status(401).json({ status: 'error', message: 'Invalid signature' });
+  }
+
+  const payload = req.body;
+  if (payload.event === 'charge.completed' && payload.data.status === 'successful') {
+    // Handle successful payment here: save to DB, send email
+  }
+
+  res.status(200).json({ status: 'success' });
 });
+
+app.listen(PORT, () => {});
