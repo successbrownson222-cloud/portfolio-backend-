@@ -97,7 +97,7 @@ app.post('/pay', async (req, res) => {
   }
 });
 
-// FLUTTERWAVE: Initialize payment - USD - FIXED
+// FLUTTERWAVE: Initialize payment - NGN FOR TESTING
 app.post('/pay/flutterwave', async (req, res) => {
   const { email, amount, name, phone, reference } = req.body;
 
@@ -107,8 +107,8 @@ app.post('/pay/flutterwave', async (req, res) => {
 
   const payload = {
     tx_ref: reference || `FLW-${Date.now()}`,
-    amount: amount,
-    currency: 'USD',
+    amount: 15000, // <-- NGN 15000 for testing
+    currency: 'NGN', // <-- Changed from USD to NGN so Bank Transfer shows
     redirect_url: `https://portfolio-paystack-api.onrender.com/payment-success?reference=${reference}`,
     payment_options: 'card,banktransfer,ussd',
     customer: {
@@ -137,7 +137,7 @@ app.post('/pay/flutterwave', async (req, res) => {
     if(response.data.status === 'success'){
       return res.status(200).json({ 
         status: 'success', 
-        data: { link: response.data.data.link } 
+        data: { link: response.data.link } 
       });
     } else {
       return res.status(400).json({ status: 'error', message: response.data.message });
@@ -202,16 +202,16 @@ app.post('/api/verify-flutterwave', async (req, res) => {
       }
     );
     
-    if (response.data.status === 'success' && response.data.data.status === 'successful') {
+    if (response.data.status === 'success' && response.data.status === 'successful') {
       return res.status(200).json({
         status: 'success',
         message: 'Payment verified successfully',
         data: {
-          email: response.data.data.customer.email,
+          email: response.data.customer.email,
           amount: response.data.data.amount,
           currency: response.data.data.currency,
           reference: response.data.data.tx_ref,
-          paid_at: response.data.data.created_at
+          paid_at: response.data.created_at
         }
       });
     } else {
